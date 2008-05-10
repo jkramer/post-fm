@@ -1,197 +1,231 @@
 #!/usr/bin/perl
-# Copyright (C) 2006-2008 by Jonas Kramer.
-# Published under the terms of the GNU General Public License (GPL).
+# vim:syn=perl ts=4 sw=4 fdm=marker
 #
-# Bug reports and feedback are always welcome.
-# <jkramer at nex dot scrapping dot cc>
+# Post.FM 1.2, Track Submission Script (CMUS -> Last.FM)
+#
+# Copyright (C) 2007 by Jonas Kramer. All rights reserved.
+# Published under the term of the GNU General Public License (GPL).
+#
+# Copy this script somewhere and make it executable. Then configure CMUS to use
+# it as status display program. Bug reports and feedback are always welcome.
 
 use strict;
 use warnings;
 
-use POSIX qw/&strftime/;
-use Digest::MD5 qw/md5_hex/;
+use Digest::MD5;
 use LWP::UserAgent;
-use IO::File;
+use Storable;
+use POSIX qw( strftime );
 
-
+# Globals. {{{
 our %rc = (
-	user	=> "your-login",
-	pass	=> "your-password",
-	pid		=> "$ENV{HOME}/.cmus/last.fm-pid",
-	cache	=> "$ENV{HOME}/.cmus/last.fm-cache",
-	np		=> undef,
-	debug	=> 0,
+	login => "your-login",
+	password => "your-password",
+
+	pid => "$ENV{HOME}/.cmus/last-pid",
+	cache => "$ENV{HOME}/.cmus/last-cache",
+
+	timeout => 10,
+	debug => undef, # glob(q|~/post-debug|),
 );
 
-our $track = "";
+our $agent = new LWP::UserAgent(
+	timeout => $rc{timeout},
+	agent => q|Post.FM/1.0,p1.2|
+);
 
-sub cleanup {
-	unlink($rc{pid});
-	exit(0);
-};
+our $time = time;
 
+our $tracks = [];
+# }}}
 
-# Append a track to the scrobble cache.
-sub store {
-	my ($track) = @_;
+# Kill our old self. {{{
+# If our predecessor is still alive, send it the ALRM signal to wake it up (if
+# it's sleeping). Give it 10 seconds to submit it's track data and exit. If
+# nothing happens, kill it.
+if(-r $rc{pid}) {
+	open PID, "<", $rc{pid};
+	my $pid = <PID>;
+	close PID;
 
-	return unless $track;
-
-	my $cache = new IO::File('>>' . $rc{cache});
-
-	if($cache) {
-		print $cache $track, "\n";
-		$cache->close;
-	}
-
-	else {
-		&debug("Failed to open cache. $!.");
-	}
-}
-
-
-# Append a message to the debug log.
-sub debug {
-	return unless $rc{debug};
-
-	my $log = new IO::File('>>' . $ENV{HOME} . '/post-log') or return;
-
-	print $log @_, "\n";
-	$log->close;
-}
-
-
-# Install signal handler for cleanup.
-$SIG{TERM} = \&cleanup;
-
-
-# If our predecessor is still alive, it's very likely that the song it's
-# going to submit was skipped, so we better kill the process or last.fm
-# will annoy us with pink messages.
-if(-e $rc{pid}) {
-	open(PIDFILE, $rc{pid});
-	my $pid = <PIDFILE>;
-	close(PIDFILE);
+	chomp $pid;
+	&log("Found PID $pid.");
 	
-	kill("TERM", $pid);
-	my $timeout = 2;
-	sleep(1) while($timeout-- && kill(0, $pid));
-	kill("KILL", $pid);
-	unlink($rc{pid}) if(-e $rc{pid});
-}
+	kill q|ALRM|, $pid;
 
+	my $second = 0;
+	for(1 .. 10) {
+		last unless kill(0, $pid);
+		++$second;
+		sleep 1;
+	}
+
+	&log("Predecessor lived further $second seconds.");
+
+	if(kill 0, $pid) {
+		kill 'KILL', $pid;
+		&log("Had to kill predecessor.");
+	}
+
+	unlink $rc{pid} if -e $rc{pid};
+}
+# }}}
+
+my %data = @ARGV;
+
+# Only submit tracks of 30 seconds or longer.
+&abort("Track too short.") if int($data{duration}) < 30;
+
+# Fork to background. {{{
 # We fork and write the PID of our child into a PID file for the reasons
 # named above. Then we exit, so CMUS can start playing the next song.
 my $pid = fork;
+
 if($pid) {
-	open(PIDFILE, ">".$rc{pid});
-	print PIDFILE $pid, "\n";
-	close(PIDFILE);
-	exit(0);
+	open PID, ">", $rc{pid};
+	print PID $pid, "\n";
+	close PID;
+	exit;
 }
-
-# Read track data given from CMUS from @ARGV into a hash. Also get the
-# current time and store it (we will give this timestamp to last.fm later
-# as the time at which we started playing the current track). $timeout is
-# used for two things: 1) as timeout (in seconds) for our GET and POST
-# operations and 2) as the number of seconds we'll have to submit our
-# track data before our successor is going to kill us.
-my $timeout = 10;
-
-our $time = time;
-our %data = @ARGV;
+# }}}
 
 my @keys = qw(artist title album duration);
-foreach(@keys) { &cleanup unless exists($data{$_}) }
+&abort("Track data incomplete.") if grep { ! exists $data{$_} } @keys;
 
-$track = join("|", (@data{@keys}, $time));
-# $track = "$data{artist}|$data{title}|$data{album}|$data{duration}|$time";
-
-&debug("Called with arguments:\n\t", join("\n\t", map { "\"$_\"" } (@ARGV)));
-
-if(exists($rc{np}) && length($rc{np})) {
-	if(open(NP, ">".$rc{np})) {
-		print NP "Now playing \"$data{title}\" by $data{artist}.\n";
-		close(NP);
-	} else {
-		&debug("Failed to open $rc{np}. $!.");
-	}
-}
-
-my $agent = new LWP::UserAgent(timeout => $timeout);
-
-# Prepare $user and $password before sleeping; maybe we need to hurry
-# later.
-my $user = $rc{user};
-$user =~ s/([^A-Za-z0-9])/sprintf("%%%02X", ord($1))/eg;
-$rc{pass} = md5_hex($rc{pass});
-
-# Sleep until we've reached the end of the song - $timeout - 2 seconds.
-sleep($data{duration} - $timeout - 2);
-
-my $url = "http://post.audioscrobbler.com/?hs=true&p=1.1&c=dcp&v=0.1&u=$user";
-my $response = $agent->get($url);
-
-&debug(
-	"Handshake response was:\n\t",
-	join("\n\t", split(/\r?\n/, $response->content))
+my %track = (
+	a => $data{artist},
+	t => $data{title},
+	i => $time,
+	r => "", # Rating, unused for offline players.
+	o => "P", # Source => (P)layer.
+	l => $data{duration},
+	b => $data{album},
+	n => $data{tracknumber} || '',
+	m => "", # MusicBrainz Id - unused.
 );
 
-if(!$response->is_success) {
-	&store;
-	&cleanup;
+if($rc{debug}) {
+	my $track = join("; ", map { "$_=<$track{$_}>" } keys %track);
+	&log($track);
 }
 
-my @response = split(/[\r\n]+/, $response->content);
-&cleanup if(shift(@response) ne "UPTODATE");
-my ($challenge, $submitURL) = splice(@response, 0, 2);
-my $md5 = md5_hex($rc{pass}.$challenge);
+$tracks = retrieve($rc{cache}) if -r $rc{cache};
 
-my @tracks = ();
+&log($#{$tracks} + 1, " tracks in cache, plus the new one.");
 
-# Read older tracks from cache.
-if(-r $rc{cache}) {
-	open(CACHE, $rc{cache});
-	my @tracks = <CACHE>;
-	close(CACHE);
+push @{$tracks}, \%track;
+
+if(!&shake) {
+	store($tracks, $rc{cache});
+	&abort("Handshake failed.");
 }
 
-push(@tracks, $track);
+# Generate a hash with form data for the POST request.
+my ($n, %form) = 0;
 
-# Put the POST string together.
-my $query = "u=$user&s=$md5&";
-my $ntrack = 0;
-foreach(@tracks) {
-	my @splt = split(/\|/);
-	next if($splt[-2] < 30);
-	foreach(qw/a t b/) {
-		my $val = (shift(@splt) or "");
-		$val =~ s/(\W)/sprintf("%%%02X", ord($1))/egi;
-		$query .= $_."[$ntrack]=$val&";
+for my $track (@{$tracks}) {
+	my %track = %{$track};
+
+	$form{s} = $rc{session}->{id};
+	$form{"$_\[$n\]"} = $track{$_} for(keys %track);
+	++$n;
+}
+# --
+
+# Sleep until the track ends (or should end if it's not skipped).
+&log("Going to sleep now.");
+
+$SIG{ALRM} = sub {
+	&log("Sleep interrupted by followup process.")
+};
+
+sleep($track{l} - (time - $time));
+
+# Our sleep might have been interrupted by an ALRM signal, so check if we've
+# sleeped long enough (-> track has been playing long enough).
+my $played = (time - $time);
+&log("Woke up after $played second(s) of playing.");
+
+&abort("Track skipped too soon.")
+	if($played < 240 and $played < $track{l} / 2);
+
+# Finally, post the track data.
+my $resp = $agent->post($rc{session}->{post}, \%form);
+
+# If the post was successful, we can delete the cache file.  Otherwise we store
+# the cache data together with our new track so a followup process can submit
+# our track data.
+if($resp->content =~ /^\s*OK/) {
+	unlink $rc{cache} if -f $rc{cache};
+	&log("Submission successful.");
+} else {
+	store($tracks, $rc{cache});
+	&abort("Submission failed. (", $resp->content, ")");
+}
+
+&abort("Exited normally.");
+
+# sub:abort {{{
+# Write debug messages to some file and exit.
+sub abort {
+	&log(@_ ? @_ : "Abort.");
+
+	unlink $rc{pid};
+	exit;
+}
+# }}}
+
+# sub:shake {{{
+# Authenticate to the scrobbling server.
+sub shake {
+	my $ctx = new Digest::MD5;
+
+	$ctx->add($rc{password});
+	my $password = $ctx->hexdigest;
+
+	$ctx->add($password, $time);
+	my $url = &urify(
+		"http://post.audioscrobbler.com/?",
+		hs => 'true',
+		p => '1.2',
+		c => 'tst',
+		v => '1.0',
+		u => $rc{login},
+		t => $time,
+		a => $ctx->hexdigest,
+	);
+
+	my $resp = $agent->get($url);
+	my %session;
+	my @lines = split /\r?\n/, $resp->content;
+
+	return undef if $lines[0] ne "OK";
+	@session{qw|id np post|} = @lines[1 .. 3];
+
+	$rc{session} = \%session;
+	return !0;
+}
+# }}}
+
+# sub:urify {{{
+# Take a base URL and a hash containing parameters and generate a URL.
+sub urify {
+	my ($base, %p) = @_;
+
+	s/(\W)/sprintf(q|%%%02X|, ord($1))/egi for(values %p);
+	$base .= join("&", map { "$_=$p{$_}" } keys %p);
+
+	return $base;
+}
+# }}}
+
+# sub:log {{{
+# Write a message to a log file.
+sub log {
+	if(@_ and $rc{debug} and open LOG, ">>", $rc{debug}) {
+		my $date = strftime q|%F %T|, localtime;
+		print LOG $date, " (", $$, "): ", @_, "\n";
+		close LOG;
 	}
-	$query .= "m[$ntrack]=&l[$ntrack]=".shift(@splt)."&i[$ntrack]=";
-	my $time = &strftime(q{%F %T}, gmtime(shift(@splt)));
-	$time =~ s/(\W)/sprintf("%%%02X", ord($1))/eg;
-	$query .= "$time&";
-	++$ntrack;
 }
-
-&debug("Post data is: $query");
-
-# POST the data to last.fm. 
-my $post = HTTP::Request->new("POST", $submitURL);
-$post->content_type("application/x-www-form-urlencoded; charset=\"UTF\"");
-$post->content($query);
-$response = $agent->request($post);
-
-&debug(
-	"Post response was:\n\t",
-	join("\n\t", split(/\r?\n/, $response->content))
-);
-
-# On success we can delete the cache, 'cause all the data in it has been
-# submitted. Otherwise we add the new track to the cache, so it can be
-# submitted later.
-$response->content =~ /^OK/ ? unlink($rc{cache}) : &store;
-
-&cleanup;
+# }}}
