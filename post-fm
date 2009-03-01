@@ -1,9 +1,7 @@
 #!/usr/bin/perl
-# vim:syn=perl ts=4 sw=4 fdm=marker
-#
 # Post.FM 1.2, Track Submission Script (CMUS -> Last.FM)
 #
-# Copyright (C) 2007 by Jonas Kramer. All rights reserved.
+# Copyright (C) 2007-2009 by Jonas Kramer. All rights reserved.
 # Published under the term of the GNU General Public License (GPL).
 #
 # Copy this script somewhere and make it executable. Then configure CMUS to use
