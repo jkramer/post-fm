@@ -25,6 +25,9 @@ our %rc = (
 
 	timeout => 10,
 	debug => undef, # glob(q|~/post-debug|),
+
+	host => 'post.audioscrobbler.com',
+	# host => 'turtle.libre.fm',
 );
 
 our $agent = new LWP::UserAgent(
@@ -173,7 +176,6 @@ sub abort {
 }
 # }}}
 
-# sub:shake {{{
 # Authenticate to the scrobbling server.
 sub shake {
 	my $ctx = new Digest::MD5;
@@ -183,7 +185,7 @@ sub shake {
 
 	$ctx->add($password, $time);
 	my $url = &urify(
-		"http://post.audioscrobbler.com/?",
+		"http://$rc{host}/?",
 		hs => 'true',
 		p => '1.2',
 		c => 'tst',
@@ -203,9 +205,7 @@ sub shake {
 	$rc{session} = \%session;
 	return !0;
 }
-# }}}
 
-# sub:urify {{{
 # Take a base URL and a hash containing parameters and generate a URL.
 sub urify {
 	my ($base, %p) = @_;
@@ -215,9 +215,7 @@ sub urify {
 
 	return $base;
 }
-# }}}
 
-# sub:log {{{
 # Write a message to a log file.
 sub log {
 	if(@_ and $rc{debug} and open LOG, ">>", $rc{debug}) {
@@ -226,4 +224,3 @@ sub log {
 		close LOG;
 	}
 }
-# }}}
