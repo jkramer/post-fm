@@ -49,23 +49,25 @@ if(-r $rc{pid}) {
 	my $pid = <PID>;
 	close PID;
 
-	chomp $pid;
-	&log("Found PID $pid.");
-	
-	kill q|ALRM|, $pid;
+	if($pid) {
+		chomp $pid;
+		&log("Found PID $pid.");
 
-	my $second = 0;
-	for(1 .. 10) {
-		last unless kill(0, $pid);
-		++$second;
-		sleep 1;
-	}
+		kill q|ALRM|, $pid;
 
-	&log("Predecessor lived further $second seconds.");
+		my $second = 0;
+		for(1 .. 10) {
+			last unless kill(0, $pid);
+			++$second;
+			sleep 1;
+		}
 
-	if(kill 0, $pid) {
-		kill 'KILL', $pid;
-		&log("Had to kill predecessor.");
+		&log("Predecessor lived further $second seconds.");
+
+		if(kill 0, $pid) {
+			kill 'KILL', $pid;
+			&log("Had to kill predecessor.");
+		}
 	}
 
 	unlink $rc{pid} if -e $rc{pid};
