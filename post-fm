@@ -14,6 +14,7 @@ use Digest::MD5;
 use LWP::UserAgent;
 use Storable;
 use POSIX qw( strftime );
+use File::Basename;
 
 # Globals. {{{
 our %rc = (
@@ -39,6 +40,12 @@ our $time = time;
 
 our $tracks = [];
 # }}}
+
+# Check if paths are available first.
+for my $file ($rc{pid}, $rc{cache}) {
+	my $path = dirname($file);
+	die "$path does not exist or is not a directory.\n" unless(-d $path);
+}
 
 # Kill our old self. {{{
 # If our predecessor is still alive, send it the ALRM signal to wake it up (if
@@ -85,7 +92,7 @@ my %data = @ARGV;
 my $pid = fork;
 
 if($pid) {
-	open PID, ">", $rc{pid};
+	open PID, ">", $rc{pid} or die "Can't write $rc{pid}. $!.\n";
 	print PID $pid, "\n";
 	close PID;
 	exit;
