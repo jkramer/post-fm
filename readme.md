@@ -2,10 +2,11 @@
 
 #About
 
-*post-fm* is a Perl script that submits information about your currently played track to Last.FM / Audioscrobbler. It’s primarily made for [http://onion.dynserv.net/~timo/cmus.html](CMUS), a ncurses based music player, but could be used as a general purpose scrobbler with only minor modifications.
-License
+*post-fm* is a Perl script that submits information about your currently played track to Last.FM / Audioscrobbler. It’s primarily made for [http://onion.dynserv.net/~timo/cmus.html](CMUS), a ncurses based music player, but could be used as a general purpose scrobbler with only minor modifications.  
 
-post-fm is published under the terms of the GNU General Public License (GPL), version 2. The full license can be found [http://www.gnu.org/licenses/gpl.txt](here).
+#License
+
+**post-fm** is published under the terms of the GNU General Public License (GPL), version 2. The full license can be found [http://www.gnu.org/licenses/gpl.txt](here).
 
 #Prerequisites
 
